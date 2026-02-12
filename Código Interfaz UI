@@ -1,0 +1,380 @@
+import tkinter as tk
+from tkinter import ttk
+import math
+import random
+from datetime import datetime
+
+class SistemaRecuperacion:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Sistema de Recuperación de Dispositivo")
+        self.root.geometry("1200x800")
+        self.root.configure(bg="#1a1a2e")
+        
+        # Variables del sistema
+        self.sistema_activo = False
+        self.latitud = 19.4326  # Coordenadas iniciales (ejemplo)
+        self.longitud = -99.1332
+        self.altitud = 2500.0
+        self.velocidad = 0.0
+        self.distancia = 1500.0  # metros
+        self.angulo_radar = 0
+        self.bateria = 85
+        
+        # Colores del tema
+        self.color_bg = "#1a1a2e"
+        self.color_panel = "#16213e"
+        self.color_activo = "#00ff00"
+        self.color_inactivo = "#ff0000"
+        self.color_texto = "#ffffff"
+        self.color_acento = "#0f3460"
+        
+        self.crear_interfaz()
+        self.actualizar_datos()
+        
+    def crear_interfaz(self):
+        # Frame principal
+        main_frame = tk.Frame(self.root, bg=self.color_bg)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # ==================== PANEL SUPERIOR ====================
+        top_frame = tk.Frame(main_frame, bg=self.color_panel, height=100)
+        top_frame.pack(fill=tk.X, pady=(0, 10))
+        top_frame.pack_propagate(False)
+        
+        # Título
+        titulo = tk.Label(top_frame, text="SISTEMA DE RECUPERACIÓN", 
+                         font=("Arial", 24, "bold"), 
+                         bg=self.color_panel, fg=self.color_texto)
+        titulo.pack(side=tk.LEFT, padx=20, pady=20)
+        
+        # Estado del sistema
+        self.estado_frame = tk.Frame(top_frame, bg=self.color_inactivo, 
+                                     width=200, height=60)
+        self.estado_frame.pack(side=tk.RIGHT, padx=20, pady=20)
+        
+        self.estado_label = tk.Label(self.estado_frame, text="INACTIVO", 
+                                     font=("Arial", 16, "bold"),
+                                     bg=self.color_inactivo, fg=self.color_texto)
+        self.estado_label.pack(expand=True)
+        
+        # Botón de activación
+        self.btn_activar = tk.Button(top_frame, text="ACTIVAR SISTEMA",
+                                     command=self.toggle_sistema,
+                                     font=("Arial", 12, "bold"),
+                                     bg="#00aa00", fg=self.color_texto,
+                                     width=15, height=2,
+                                     cursor="hand2")
+        self.btn_activar.pack(side=tk.RIGHT, padx=10)
+        
+        # ==================== PANEL CENTRAL ====================
+        center_frame = tk.Frame(main_frame, bg=self.color_bg)
+        center_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Panel izquierdo (Radar y Mapa)
+        left_panel = tk.Frame(center_frame, bg=self.color_bg)
+        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        
+        # RADAR
+        radar_frame = tk.LabelFrame(left_panel, text="RADAR", 
+                                   font=("Arial", 12, "bold"),
+                                   bg=self.color_panel, fg=self.color_texto,
+                                   labelanchor="n")
+        radar_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        self.canvas_radar = tk.Canvas(radar_frame, bg="#0a0a0a", 
+                                     highlightthickness=0)
+        self.canvas_radar.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # MAPA
+        mapa_frame = tk.LabelFrame(left_panel, text="MAPA DE UBICACIÓN", 
+                                  font=("Arial", 12, "bold"),
+                                  bg=self.color_panel, fg=self.color_texto,
+                                  labelanchor="n")
+        mapa_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.canvas_mapa = tk.Canvas(mapa_frame, bg="#1a3a1a",
+                                    highlightthickness=0)
+        self.canvas_mapa.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Panel derecho (Telemetría)
+        right_panel = tk.Frame(center_frame, bg=self.color_panel, width=350)
+        right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(5, 0))
+        right_panel.pack_propagate(False)
+        
+        # TELEMETRÍA
+        telemetria_label = tk.Label(right_panel, text="TELEMETRÍA",
+                                   font=("Arial", 14, "bold"),
+                                   bg=self.color_panel, fg=self.color_texto)
+        telemetria_label.pack(pady=10)
+        
+        # Container para los datos
+        datos_frame = tk.Frame(right_panel, bg=self.color_panel)
+        datos_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+        
+        # Crear campos de telemetría
+        self.crear_campo_telemetria(datos_frame, "LATITUD:", "latitud_valor")
+        self.crear_campo_telemetria(datos_frame, "LONGITUD:", "longitud_valor")
+        self.crear_campo_telemetria(datos_frame, "ALTITUD:", "altitud_valor")
+        self.crear_campo_telemetria(datos_frame, "VELOCIDAD:", "velocidad_valor")
+        self.crear_campo_telemetria(datos_frame, "DISTANCIA:", "distancia_valor")
+        self.crear_campo_telemetria(datos_frame, "BATERÍA:", "bateria_valor")
+        
+        # Separador
+        sep = tk.Frame(datos_frame, bg="#444444", height=2)
+        sep.pack(fill=tk.X, pady=15)
+        
+        # Hora del sistema
+        hora_frame = tk.Frame(datos_frame, bg=self.color_acento)
+        hora_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Label(hora_frame, text="HORA DEL SISTEMA",
+                font=("Arial", 10, "bold"),
+                bg=self.color_acento, fg=self.color_texto).pack(pady=5)
+        
+        self.hora_valor = tk.Label(hora_frame, text="--:--:--",
+                                  font=("Arial", 16, "bold"),
+                                  bg=self.color_acento, fg="#00ff00")
+        self.hora_valor.pack(pady=5)
+        
+        # Botones de control
+        controles_frame = tk.Frame(datos_frame, bg=self.color_panel)
+        controles_frame.pack(fill=tk.X, pady=20)
+        
+        tk.Button(controles_frame, text="REINICIAR",
+                 command=self.reiniciar_sistema,
+                 bg="#ff6600", fg=self.color_texto,
+                 font=("Arial", 10, "bold"),
+                 width=15).pack(pady=5)
+        
+        tk.Button(controles_frame, text="CALIBRAR",
+                 command=self.calibrar_sistema,
+                 bg="#0066ff", fg=self.color_texto,
+                 font=("Arial", 10, "bold"),
+                 width=15).pack(pady=5)
+        
+        # Estado de conexión
+        self.conexion_label = tk.Label(datos_frame, text="● CONEXIÓN: ESTABLE",
+                                      font=("Arial", 9),
+                                      bg=self.color_panel, fg="#00ff00")
+        self.conexion_label.pack(pady=10)
+        
+    def crear_campo_telemetria(self, parent, etiqueta, var_name):
+        frame = tk.Frame(parent, bg=self.color_panel)
+        frame.pack(fill=tk.X, pady=8)
+        
+        tk.Label(frame, text=etiqueta,
+                font=("Arial", 11, "bold"),
+                bg=self.color_panel, fg="#aaaaaa",
+                width=12, anchor="w").pack(side=tk.LEFT)
+        
+        valor = tk.Label(frame, text="0.00",
+                        font=("Arial", 11),
+                        bg=self.color_acento, fg=self.color_activo,
+                        width=18, anchor="e", padx=10)
+        valor.pack(side=tk.RIGHT, fill=tk.X, expand=True)
+        
+        setattr(self, var_name, valor)
+        
+    def dibujar_radar(self):
+        self.canvas_radar.delete("all")
+        width = self.canvas_radar.winfo_width()
+        height = self.canvas_radar.winfo_height()
+        
+        if width <= 1 or height <= 1:
+            return
+        
+        center_x = width / 2
+        center_y = height / 2
+        radio = min(width, height) / 2 - 20
+        
+        # Círculos concéntricos
+        for i in range(4, 0, -1):
+            r = radio * i / 4
+            self.canvas_radar.create_oval(center_x - r, center_y - r,
+                                         center_x + r, center_y + r,
+                                         outline="#00ff00", width=1)
+        
+        # Líneas de referencia
+        self.canvas_radar.create_line(center_x, center_y - radio,
+                                     center_x, center_y + radio,
+                                     fill="#00ff00", width=1, dash=(2, 4))
+        self.canvas_radar.create_line(center_x - radio, center_y,
+                                     center_x + radio, center_y,
+                                     fill="#00ff00", width=1, dash=(2, 4))
+        
+        # Etiquetas de distancia
+        for i in range(1, 5):
+            distancia_km = (self.distancia / 1000) * i / 4
+            r = radio * i / 4
+            self.canvas_radar.create_text(center_x + r - 15, center_y - 5,
+                                        text=f"{distancia_km:.1f}km",
+                                        fill="#00ff00", font=("Arial", 8))
+        
+        if self.sistema_activo:
+            # Línea de barrido del radar
+            angle_rad = math.radians(self.angulo_radar)
+            end_x = center_x + radio * math.cos(angle_rad)
+            end_y = center_y - radio * math.sin(angle_rad)
+            
+            self.canvas_radar.create_line(center_x, center_y, end_x, end_y,
+                                         fill="#00ff00", width=2)
+            
+            # Objetivo detectado
+            if self.distancia > 0:
+                dist_ratio = min(self.distancia / (self.distancia * 1.5), 1)
+                obj_x = center_x + radio * dist_ratio * 0.6 * math.cos(angle_rad)
+                obj_y = center_y - radio * dist_ratio * 0.6 * math.sin(angle_rad)
+                
+                # Pulso del objetivo
+                pulse_size = 8 + 4 * math.sin(self.angulo_radar / 20)
+                self.canvas_radar.create_oval(obj_x - pulse_size, obj_y - pulse_size,
+                                             obj_x + pulse_size, obj_y + pulse_size,
+                                             fill="#ff0000", outline="#ff0000")
+                
+                # Etiqueta del objetivo
+                self.canvas_radar.create_text(obj_x + 15, obj_y - 15,
+                                            text=f"{self.distancia:.0f}m",
+                                            fill="#ff0000",
+                                            font=("Arial", 9, "bold"))
+        
+        # Texto de estado
+        estado_texto = "ACTIVO" if self.sistema_activo else "EN ESPERA"
+        self.canvas_radar.create_text(center_x, 15,
+                                     text=f"RADAR {estado_texto}",
+                                     fill="#00ff00",
+                                     font=("Arial", 10, "bold"))
+        
+    def dibujar_mapa(self):
+        self.canvas_mapa.delete("all")
+        width = self.canvas_mapa.winfo_width()
+        height = self.canvas_mapa.winfo_height()
+        
+        if width <= 1 or height <= 1:
+            return
+        
+        # Grid del mapa
+        grid_spacing = 40
+        for i in range(0, width, grid_spacing):
+            self.canvas_mapa.create_line(i, 0, i, height,
+                                        fill="#2a4a2a", width=1)
+        for i in range(0, height, grid_spacing):
+            self.canvas_mapa.create_line(0, i, width, i,
+                                        fill="#2a4a2a", width=1)
+        
+        # Posición del dispositivo
+        if self.sistema_activo:
+            # Calcular posición en el canvas
+            pos_x = width / 2 + (self.longitud - (-99.1332)) * 1000
+            pos_y = height / 2 - (self.latitud - 19.4326) * 1000
+            
+            # Asegurar que esté dentro del canvas
+            pos_x = max(30, min(width - 30, pos_x))
+            pos_y = max(30, min(height - 30, pos_y))
+            
+            # Círculo de precisión
+            self.canvas_mapa.create_oval(pos_x - 25, pos_y - 25,
+                                        pos_x + 25, pos_y + 25,
+                                        outline="#ffff00", width=2, dash=(5, 3))
+            
+            # Marcador del dispositivo
+            self.canvas_mapa.create_polygon(pos_x, pos_y - 15,
+                                          pos_x - 10, pos_y + 10,
+                                          pos_x + 10, pos_y + 10,
+                                          fill="#ff0000", outline="#ffffff", width=2)
+            
+            # Etiqueta
+            self.canvas_mapa.create_text(pos_x, pos_y + 25,
+                                        text="DISPOSITIVO",
+                                        fill="#ffffff",
+                                        font=("Arial", 9, "bold"))
+            
+            # Base de recuperación
+            base_x = width / 2
+            base_y = height / 2
+            self.canvas_mapa.create_rectangle(base_x - 10, base_y - 10,
+                                            base_x + 10, base_y + 10,
+                                            fill="#00ff00", outline="#ffffff", width=2)
+            self.canvas_mapa.create_text(base_x, base_y - 20,
+                                        text="BASE",
+                                        fill="#00ff00",
+                                        font=("Arial", 9, "bold"))
+            
+            # Línea de conexión
+            self.canvas_mapa.create_line(base_x, base_y, pos_x, pos_y,
+                                        fill="#00aaff", width=2, dash=(10, 5))
+        
+        # Coordenadas en las esquinas
+        self.canvas_mapa.create_text(10, height - 10,
+                                    text=f"Lat: {self.latitud:.4f}°",
+                                    fill="#ffffff", anchor="sw",
+                                    font=("Arial", 8))
+        self.canvas_mapa.create_text(width - 10, height - 10,
+                                    text=f"Lon: {self.longitud:.4f}°",
+                                    fill="#ffffff", anchor="se",
+                                    font=("Arial", 8))
+        
+    def actualizar_datos(self):
+        if self.sistema_activo:
+            # Simular cambios en los datos
+            self.angulo_radar = (self.angulo_radar + 5) % 360
+            self.distancia = max(50, self.distancia + random.uniform(-20, -5))
+            self.altitud = max(0, self.altitud + random.uniform(-10, 5))
+            self.velocidad = random.uniform(0, 15)
+            self.latitud += random.uniform(-0.0001, 0.0001)
+            self.longitud += random.uniform(-0.0001, 0.0001)
+            self.bateria = max(0, self.bateria - 0.01)
+            
+            # Actualizar valores en la interfaz
+            self.latitud_valor.config(text=f"{self.latitud:.6f}°")
+            self.longitud_valor.config(text=f"{self.longitud:.6f}°")
+            self.altitud_valor.config(text=f"{self.altitud:.2f} m")
+            self.velocidad_valor.config(text=f"{self.velocidad:.2f} m/s")
+            self.distancia_valor.config(text=f"{self.distancia:.2f} m")
+            self.bateria_valor.config(text=f"{self.bateria:.1f} %")
+            
+        # Actualizar hora
+        hora_actual = datetime.now().strftime("%H:%M:%S")
+        self.hora_valor.config(text=hora_actual)
+        
+        # Redibujar visualizaciones
+        self.dibujar_radar()
+        self.dibujar_mapa()
+        
+        # Programar siguiente actualización
+        self.root.after(100, self.actualizar_datos)
+        
+    def toggle_sistema(self):
+        self.sistema_activo = not self.sistema_activo
+        
+        if self.sistema_activo:
+            self.estado_frame.config(bg=self.color_activo)
+            self.estado_label.config(bg=self.color_activo, text="ACTIVO")
+            self.btn_activar.config(text="DESACTIVAR SISTEMA", bg="#aa0000")
+            self.conexion_label.config(text="● CONEXIÓN: ESTABLE", fg="#00ff00")
+        else:
+            self.estado_frame.config(bg=self.color_inactivo)
+            self.estado_label.config(bg=self.color_inactivo, text="INACTIVO")
+            self.btn_activar.config(text="ACTIVAR SISTEMA", bg="#00aa00")
+            self.conexion_label.config(text="● CONEXIÓN: DESCONECTADO", fg="#ff0000")
+            
+    def reiniciar_sistema(self):
+        self.latitud = 19.4326
+        self.longitud = -99.1332
+        self.altitud = 2500.0
+        self.distancia = 1500.0
+        self.bateria = 85
+        self.velocidad = 0
+        self.angulo_radar = 0
+        
+    def calibrar_sistema(self):
+        # Simulación de calibración
+        self.conexion_label.config(text="● CALIBRANDO...", fg="#ffaa00")
+        self.root.after(2000, lambda: self.conexion_label.config(
+            text="● CONEXIÓN: ESTABLE", fg="#00ff00"))
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = SistemaRecuperacion(root)
+    root.mainloop()

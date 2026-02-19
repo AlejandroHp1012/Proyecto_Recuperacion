@@ -236,8 +236,11 @@ class SistemaRecuperacion:
 
         self._status_items = []
         statuses = [
-            ("SYS", "NOMINAL"), ("COMM", "IDLE"), ("GPS", "STANDBY"),
-            ("BAT", "85%"), ("DIST", "1500m"), ("ALT", "2500m"),
+            ("SYS",      "NOMINAL"),
+            ("COMM",     "IDLE"),
+            ("GPS",      "STANDBY"),
+            ("DISTANCIA","1500m"),
+            ("ALTITUD",  "2500m"),
         ]
         for key, val in statuses:
             f = tk.Frame(status_bar, bg=C["panel"])
@@ -837,11 +840,9 @@ class SistemaRecuperacion:
 
             # Status bar
             for key, lbl in self._status_items:
-                if key == "BAT":
-                    lbl.config(text=f"{self.bateria:.0f}%")
-                elif key == "DIST":
+                if key == "DISTANCIA":
                     lbl.config(text=f"{self.distancia:.0f}m")
-                elif key == "ALT":
+                elif key == "ALTITUD":
                     lbl.config(text=f"{self.altitud:.0f}m")
 
             # Mapa real

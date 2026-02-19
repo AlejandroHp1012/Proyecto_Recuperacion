@@ -4,6 +4,8 @@ import math
 import random
 from datetime import datetime
 import time
+import json
+import os
 
 try:
     import tkintermapview
@@ -148,6 +150,14 @@ class SistemaRecuperacion:
         self._leds: dict = {}
         self._prev_vals: dict = {}
 
+        # JSON log
+        self._json_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "telemetria_log.json"
+        )
+        self._json_buffer: list = []
+        self._json_flush_every = 10   # guardar archivo cada N muestras
+
         self._construir_ui()
         self._loop()
 
@@ -201,16 +211,16 @@ class SistemaRecuperacion:
                  font=FONT_MONO_S, bg=C["bg"],
                  fg=C["amber_dim"]).pack(side=tk.RIGHT)
 
-        # Botón activar — estilo terminal
-        self._btn_f = tk.Frame(right_hdr, bg=C["red_alert"],
+        # Botón activar — estilo terminal (verde)
+        self._btn_f = tk.Frame(right_hdr, bg=C["green"],
                                padx=1, pady=1)
         self._btn_f.pack(side=tk.RIGHT, padx=16)
         self._btn = tk.Button(self._btn_f,
                               text="[ ACTIVAR SISTEMA ]",
                               font=FONT_MONO,
-                              bg="#1a0000", fg=C["red_alert"],
-                              activebackground="#330000",
-                              activeforeground=C["red_alert"],
+                              bg="#001a00", fg=C["green"],
+                              activebackground="#002a00",
+                              activeforeground=C["green"],
                               bd=0, padx=10, pady=6,
                               cursor="hand2",
                               command=self._toggle)
@@ -362,10 +372,10 @@ class SistemaRecuperacion:
 
         # ── Campos ───────────────────────────────────────────────────────────
         campos = [
-            ("LAT",  "latitud_valor",  "latitud"),
-            ("LON",  "longitud_valor", "longitud"),
-            ("ALT",  "altitud_valor",  "altitud"),
-            ("GPS",  "hora_gps_valor", "hora_gps"),
+            ("LATITUD",    "latitud_valor",  "latitud"),
+            ("LONGITUD",   "longitud_valor", "longitud"),
+            ("ALTITUD",    "altitud_valor",  "altitud"),
+            ("HORA GPS",   "hora_gps_valor", "hora_gps"),
         ]
         for lbl, var, key in campos:
             self._campo_telem(inner, lbl, var, key)
@@ -490,7 +500,7 @@ class SistemaRecuperacion:
         # Etiqueta
         tk.Label(row, text=f" {label}",
                  font=FONT_MONO_S, bg=C["panel"],
-                 fg=C["amber_dim"], width=5,
+                 fg=C["amber_dim"], width=9,
                  anchor="w").pack(side=tk.LEFT, fill=tk.Y, ipady=4)
 
         tk.Frame(row, bg=C["border"], width=1).pack(side=tk.LEFT, fill=tk.Y)
@@ -733,6 +743,73 @@ class SistemaRecuperacion:
             self._set_led(c, state)
 
     # =========================================================================
+    # JSON
+    # =========================================================================
+    def _guardar_json(self):
+        """Agrega la muestra actual al buffer y vuelca al archivo JSON."""
+        muestra = {
+            "timestamp":  datetime.now().isoformat(timespec="milliseconds"),
+            "hora_gps":   self.hora_gps,
+            "latitud":    round(self.latitud,  6),
+            "longitud":   round(self.longitud, 6),
+            "altitud_m":  round(self.altitud,  2),
+            "velocidad_ms": round(self.velocidad, 2),
+            "distancia_m":  round(self.distancia, 1),
+            "bateria_pct":  round(self.bateria,   2),
+            "angulo_radar": self.angulo_radar,
+        }
+        self._json_buffer.append(muestra)
+
+        if len(self._json_buffer) % self._json_flush_every == 0:
+            self._flush_json()
+
+    def _flush_json(self):
+        """Escribe/actualiza el archivo JSON en disco."""
+        try:
+            # Si ya existe, cargamos el histórico para no sobreescribirlo
+            if os.path.exists(self._json_path):
+                with open(self._json_path, "r", encoding="utf-8") as f:
+                    historico = json.load(f)
+            else:
+                historico = {"sesiones": []}
+
+            # Añadir la sesión actual (o actualizar la última si sigue activa)
+            if (historico["sesiones"] and
+                    historico["sesiones"][-1].get("activa")):
+                historico["sesiones"][-1]["muestras"] = self._json_buffer
+                historico["sesiones"][-1]["ultima_muestra"] = (
+                    datetime.now().isoformat(timespec="milliseconds"))
+            else:
+                historico["sesiones"].append({
+                    "inicio":        self._session_start,
+                    "ultima_muestra": datetime.now().isoformat(timespec="milliseconds"),
+                    "activa":        True,
+                    "muestras":      self._json_buffer,
+                })
+
+            with open(self._json_path, "w", encoding="utf-8") as f:
+                json.dump(historico, f, indent=2, ensure_ascii=False)
+
+        except Exception as e:
+            self._log(f">>> ERROR al guardar JSON: {e}")
+
+    def _cerrar_sesion_json(self):
+        """Marca la sesión como cerrada y hace flush final."""
+        self._flush_json()
+        try:
+            with open(self._json_path, "r", encoding="utf-8") as f:
+                historico = json.load(f)
+            if historico["sesiones"]:
+                historico["sesiones"][-1]["activa"] = False
+                historico["sesiones"][-1]["fin"] = (
+                    datetime.now().isoformat(timespec="milliseconds"))
+                historico["sesiones"][-1]["total_muestras"] = len(self._json_buffer)
+            with open(self._json_path, "w", encoding="utf-8") as f:
+                json.dump(historico, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            self._log(f">>> ERROR al cerrar sesión JSON: {e}")
+
+    # =========================================================================
     # LOOP
     # =========================================================================
     def _loop(self):
@@ -786,6 +863,9 @@ class SistemaRecuperacion:
                     f"BAT {self.bateria:.1f}%"
                 )
 
+            # Guardar muestra en JSON
+            self._guardar_json()
+
         self._actualizar_leds()
         self._dibujar_radar()
         self._dibujar_bateria()
@@ -800,12 +880,17 @@ class SistemaRecuperacion:
     def _toggle(self):
         self.sistema_activo = not self.sistema_activo
         if self.sistema_activo:
+            # Iniciar sesión JSON
+            self._session_start = datetime.now().isoformat(timespec="milliseconds")
+            self._json_buffer = []
+
             self._btn.config(text="[ DESACTIVAR SISTEMA ]",
                             bg="#1a0000", fg=C["red_alert"])
             self._btn_f.config(bg=C["red_alert"])
             self._sys_lbl.config(text="◉ SISTEMA: ACTIVO", fg=C["green"])
             self.conexion_label.config(text="◉ ENLACE: ESTABLE", fg=C["green"])
             self._log(">>> SISTEMA ACTIVADO — Inicio de seguimiento")
+            self._log(f">>> Grabando telemetría en: {self._json_path}")
             for key, lbl in self._status_items:
                 if key == "SYS":
                     lbl.config(text="ACTIVO", fg=C["green"])
@@ -814,19 +899,25 @@ class SistemaRecuperacion:
                 elif key == "GPS":
                     lbl.config(text="LOCK",   fg=C["green"])
         else:
+            # Cerrar sesión JSON
+            self._cerrar_sesion_json()
+            n = len(self._json_buffer)
+            self._log(f">>> SISTEMA DESACTIVADO — {n} muestras guardadas en JSON")
+
             self._btn.config(text="[ ACTIVAR SISTEMA ]",
-                            bg="#1a0000", fg=C["red_alert"])
-            self._btn_f.config(bg=C["red_alert"])
+                            bg="#001a00", fg=C["green"])
+            self._btn_f.config(bg=C["green"])
             self._sys_lbl.config(text="● SISTEMA: INACTIVO", fg=C["red_alert"])
             self.conexion_label.config(text="◌ ENLACE: DESCONECTADO",
                                        fg=C["red_alert"])
-            self._log(">>> SISTEMA DESACTIVADO")
             for key, lbl in self._status_items:
                 if key in ("SYS", "COMM", "GPS"):
                     lbl.config(text={"SYS":"OFFLINE","COMM":"IDLE","GPS":"STBY"}[key],
                                fg=C["amber_dim"])
 
     def _reiniciar(self):
+        if self.sistema_activo and self._json_buffer:
+            self._flush_json()
         self.latitud   = 22.1475
         self.longitud  = -102.2783
         self.altitud   = 2500.0

@@ -1,0 +1,607 @@
+import tkinter as tk
+from tkinter import ttk
+import math
+import random
+from datetime import datetime
+
+# Intentar importar tkintermapview
+try:
+    import tkintermapview
+    MAPA_REAL = True
+except ImportError:
+    MAPA_REAL = False
+
+# ── Estados del foco LED ──────────────────────────────────────────────────────
+LED_OFF     = "off"      # Sistema apagado  → foco apagado (gris oscuro)
+LED_OK      = "ok"       # Dato recibido    → verde brillante
+LED_ERROR   = "error"    # Sin datos        → rojo brillante
+
+# Paleta de colores por estado del LED
+LED_COLORS = {
+    LED_OFF:   {"center": "#333333", "ring": "#222222", "glow": "#1a1a2e"},
+    LED_OK:    {"center": "#00ff88", "ring": "#00cc66", "glow": "#003322"},
+    LED_ERROR: {"center": "#ff3333", "ring": "#cc0000", "glow": "#330000"},
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class FocoLED(tk.Canvas):
+    """
+    Widget Canvas que simula un foco LED de 3 capas:
+      • Resplandor exterior (glow)
+      • Anillo (ring)
+      • Punto central brillante (center)
+    """
+    SIZE = 22  # diámetro total en píxeles
+
+    def __init__(self, parent, bg_color, **kwargs):
+        super().__init__(parent,
+                         width=self.SIZE, height=self.SIZE,
+                         bg=bg_color, highlightthickness=0,
+                         **kwargs)
+        self._state = LED_OFF
+        self._anim_id = None
+        self._pulse = 0          # fase de pulsación cuando está en OK
+        self._draw()
+
+    # ── API pública ──────────────────────────────────────────────────────────
+    def set_state(self, state: str):
+        if state == self._state:
+            return
+        self._state = state
+        if self._anim_id:
+            self.after_cancel(self._anim_id)
+            self._anim_id = None
+        self._pulse = 0
+        if state == LED_OK:
+            self._animate_pulse()
+        else:
+            self._draw()
+
+    # ── Dibujo ───────────────────────────────────────────────────────────────
+    def _draw(self, brightness=1.0):
+        self.delete("all")
+        c = LED_COLORS[self._state]
+        cx = cy = self.SIZE / 2
+        r = self.SIZE / 2
+
+        # 1) Resplandor exterior
+        self.create_oval(1, 1, self.SIZE - 1, self.SIZE - 1,
+                         fill=c["glow"], outline="")
+
+        # 2) Anillo
+        ring_pad = r * 0.25
+        self.create_oval(ring_pad, ring_pad,
+                         self.SIZE - ring_pad, self.SIZE - ring_pad,
+                         fill=c["ring"], outline="")
+
+        # 3) Centro (con brillo modulado)
+        center_pad = r * 0.55
+        center_color = self._blend(c["center"], brightness)
+        self.create_oval(center_pad, center_pad,
+                         self.SIZE - center_pad, self.SIZE - center_pad,
+                         fill=center_color, outline="")
+
+        # 4) Reflejo blanco (siempre, para aspecto realista)
+        if self._state != LED_OFF:
+            hi_size = r * 0.28
+            self.create_oval(cx - hi_size * 1.3, cy - hi_size * 1.5,
+                             cx + hi_size * 0.3, cy + hi_size * 0.1,
+                             fill="#ffffff", outline="")
+
+    def _animate_pulse(self):
+        """Pulsación suave cuando el LED está en OK."""
+        self._pulse = (self._pulse + 0.15) % (2 * math.pi)
+        brightness = 0.75 + 0.25 * math.sin(self._pulse)
+        self._draw(brightness)
+        self._anim_id = self.after(60, self._animate_pulse)
+
+    @staticmethod
+    def _blend(hex_color: str, brightness: float) -> str:
+        """Oscurece un color hex según el factor brightness (0-1)."""
+        hex_color = hex_color.lstrip("#")
+        r = int(int(hex_color[0:2], 16) * brightness)
+        g = int(int(hex_color[2:4], 16) * brightness)
+        b = int(int(hex_color[4:6], 16) * brightness)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+
+class SistemaRecuperacion:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Sistema de Recuperación - Cohete")
+        self.root.geometry("1300x850")
+        self.root.configure(bg="#1a1a2e")
+
+        # Variables del sistema
+        self.sistema_activo = False
+        self.latitud = 22.1475       # Zona de lanzamiento - Aguascalientes
+        self.longitud = -102.2783
+        self.altitud = 2500.0
+        self.velocidad = 0.0
+        self.distancia = 1500.0
+        self.angulo_radar = 0
+        self.bateria = 85
+        self.hora_gps = "--:--:--"
+
+        # Historial de trayectoria
+        self.trayectoria = []
+        self.marker_cohete = None
+        self.path_trayectoria = None
+
+        # Rastreo de última actualización por campo (para detectar "sin datos")
+        self._last_update: dict[str, float] = {}
+
+        # Colores del tema
+        self.color_bg     = "#1a1a2e"
+        self.color_panel  = "#16213e"
+        self.color_activo = "#00ff00"
+        self.color_inactivo = "#ff0000"
+        self.color_texto  = "#ffffff"
+        self.color_acento = "#0f3460"
+
+        self.crear_interfaz()
+        self.actualizar_datos()
+
+    # ── Interfaz ──────────────────────────────────────────────────────────────
+    def crear_interfaz(self):
+        main_frame = tk.Frame(self.root, bg=self.color_bg)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # ── Panel superior ───────────────────────────────────────────────────
+        top_frame = tk.Frame(main_frame, bg=self.color_panel, height=100)
+        top_frame.pack(fill=tk.X, pady=(0, 10))
+        top_frame.pack_propagate(False)
+
+        titulo = tk.Label(top_frame,
+                          text="🚀 SISTEMA DE RECUPERACIÓN - COHETE",
+                          font=("Arial", 22, "bold"),
+                          bg=self.color_panel, fg=self.color_texto)
+        titulo.pack(side=tk.LEFT, padx=20, pady=20)
+
+        self.estado_frame = tk.Frame(top_frame, bg=self.color_inactivo, width=200, height=60)
+        self.estado_frame.pack(side=tk.RIGHT, padx=20, pady=20)
+        self.estado_label = tk.Label(self.estado_frame, text="INACTIVO",
+                                     font=("Arial", 16, "bold"),
+                                     bg=self.color_inactivo, fg=self.color_texto)
+        self.estado_label.pack(expand=True)
+
+        self.btn_activar = tk.Button(top_frame, text="ACTIVAR SISTEMA",
+                                     command=self.toggle_sistema,
+                                     font=("Arial", 12, "bold"),
+                                     bg="#00aa00", fg=self.color_texto,
+                                     width=15, height=2, cursor="hand2")
+        self.btn_activar.pack(side=tk.RIGHT, padx=10)
+
+        # ── Panel central ────────────────────────────────────────────────────
+        center_frame = tk.Frame(main_frame, bg=self.color_bg)
+        center_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Panel izquierdo (Radar + Mapa)
+        left_panel = tk.Frame(center_frame, bg=self.color_bg)
+        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+
+        # RADAR
+        radar_frame = tk.LabelFrame(left_panel, text="RADAR",
+                                    font=("Arial", 12, "bold"),
+                                    bg=self.color_panel, fg=self.color_texto,
+                                    labelanchor="n")
+        radar_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        self.canvas_radar = tk.Canvas(radar_frame, bg="#0a0a0a", highlightthickness=0)
+        self.canvas_radar.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # MAPA
+        mapa_titulo = "MAPA REAL (OpenStreetMap)" if MAPA_REAL else "MAPA DE UBICACIÓN (instala tkintermapview)"
+        mapa_frame = tk.LabelFrame(left_panel, text=mapa_titulo,
+                                   font=("Arial", 12, "bold"),
+                                   bg=self.color_panel,
+                                   fg="#00ff00" if MAPA_REAL else "#ffaa00",
+                                   labelanchor="n")
+        mapa_frame.pack(fill=tk.BOTH, expand=True)
+
+        if MAPA_REAL:
+            self.mapa_widget = tkintermapview.TkinterMapView(mapa_frame, corner_radius=0)
+            self.mapa_widget.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+            self.mapa_widget.set_position(22.1475, -102.2783)
+            self.mapa_widget.set_zoom(16)
+            self.marker_base = self.mapa_widget.set_marker(
+                22.1475, -102.2783, text="🏁 BASE DE LANZAMIENTO",
+                marker_color_circle="green", marker_color_outside="darkgreen")
+            self.marker_cohete = self.mapa_widget.set_marker(
+                self.latitud, self.longitud, text="🚀 COHETE",
+                marker_color_circle="red", marker_color_outside="darkred")
+
+            btn_frame = tk.Frame(mapa_frame, bg=self.color_panel)
+            btn_frame.pack(fill=tk.X, padx=5, pady=3)
+            tk.Button(btn_frame, text="🗺 Calles", font=("Arial", 9),
+                      command=lambda: self.mapa_widget.set_tile_server(
+                          "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"),
+                      bg="#0066ff", fg="white", width=10).pack(side=tk.LEFT, padx=3)
+            tk.Button(btn_frame, text="🛰 Satélite", font=("Arial", 9),
+                      command=lambda: self.mapa_widget.set_tile_server(
+                          "https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}&s=Ga", max_zoom=22),
+                      bg="#006600", fg="white", width=10).pack(side=tk.LEFT, padx=3)
+            tk.Button(btn_frame, text="⛰ Terreno", font=("Arial", 9),
+                      command=lambda: self.mapa_widget.set_tile_server(
+                          "https://mt0.google.com/vt/lyrs=p&hl=en&x={x}&y={y}&z={z}&s=Ga", max_zoom=22),
+                      bg="#664400", fg="white", width=10).pack(side=tk.LEFT, padx=3)
+            tk.Button(btn_frame, text="🔄 Centrar", font=("Arial", 9),
+                      command=self.centrar_mapa,
+                      bg="#444444", fg="white", width=10).pack(side=tk.RIGHT, padx=3)
+        else:
+            self.canvas_mapa = tk.Canvas(mapa_frame, bg="#1a3a1a", highlightthickness=0)
+            self.canvas_mapa.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            tk.Label(mapa_frame,
+                     text="Para activar el mapa real, ejecuta en tu terminal:\npip install tkintermapview",
+                     font=("Arial", 10), bg=self.color_panel, fg="#ffaa00").pack(pady=5)
+
+        # ── Panel derecho (Telemetría) ───────────────────────────────────────
+        right_panel = tk.Frame(center_frame, bg=self.color_panel, width=380)
+        right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(5, 0))
+        right_panel.pack_propagate(False)
+
+        tk.Label(right_panel, text="TELEMETRÍA DEL COHETE",
+                 font=("Arial", 13, "bold"),
+                 bg=self.color_panel, fg=self.color_texto).pack(pady=10)
+
+        datos_frame = tk.Frame(right_panel, bg=self.color_panel)
+        datos_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+
+        # ── Leyenda LED ──────────────────────────────────────────────────────
+        leyenda_frame = tk.Frame(datos_frame, bg="#0a1a0a", padx=8, pady=6)
+        leyenda_frame.pack(fill=tk.X, pady=(0, 10))
+
+        tk.Label(leyenda_frame, text="ESTADO DE SEÑAL:",
+                 font=("Arial", 8, "bold"),
+                 bg="#0a1a0a", fg="#aaaaaa").pack(side=tk.LEFT, padx=(0, 8))
+
+        for state, label in [(LED_OK, "OK"), (LED_ERROR, "Sin datos"), (LED_OFF, "Inactivo")]:
+            mini = FocoLED(leyenda_frame, bg_color="#0a1a0a")
+            mini.set_state(state)
+            mini.pack(side=tk.LEFT, padx=(0, 2))
+            tk.Label(leyenda_frame, text=label,
+                     font=("Arial", 8), bg="#0a1a0a", fg="#aaaaaa").pack(side=tk.LEFT, padx=(0, 10))
+
+        # ── Campos de telemetría con LED ─────────────────────────────────────
+        self._leds: dict[str, FocoLED] = {}
+
+        self.crear_campo_telemetria(datos_frame, "LATITUD:",       "latitud_valor",  "latitud")
+        self.crear_campo_telemetria(datos_frame, "LONGITUD:",      "longitud_valor", "longitud")
+        self.crear_campo_telemetria(datos_frame, "ALTITUD FINAL:", "altitud_valor",  "altitud")
+        self.crear_campo_telemetria(datos_frame, "HORA GPS:",      "hora_gps_valor", "hora_gps")
+
+        tk.Frame(datos_frame, bg="#444444", height=2).pack(fill=tk.X, pady=12)
+
+        # ── Hora del sistema ─────────────────────────────────────────────────
+        hora_frame = tk.Frame(datos_frame, bg=self.color_acento)
+        hora_frame.pack(fill=tk.X, pady=6)
+        tk.Label(hora_frame, text="HORA DEL SISTEMA",
+                 font=("Arial", 10, "bold"),
+                 bg=self.color_acento, fg=self.color_texto).pack(pady=5)
+        self.hora_valor = tk.Label(hora_frame, text="--:--:--",
+                                   font=("Arial", 16, "bold"),
+                                   bg=self.color_acento, fg="#00ff00")
+        self.hora_valor.pack(pady=5)
+
+        # ── Fuente de datos ──────────────────────────────────────────────────
+        tk.Frame(datos_frame, bg="#444444", height=2).pack(fill=tk.X, pady=8)
+
+        fuente_frame = tk.Frame(datos_frame, bg="#0a2a0a")
+        fuente_frame.pack(fill=tk.X, pady=4)
+        tk.Label(fuente_frame, text="FUENTE DE DATOS",
+                 font=("Arial", 9, "bold"),
+                 bg="#0a2a0a", fg="#aaaaaa").pack(pady=(5, 0))
+        self.fuente_label = tk.Label(fuente_frame,
+                                     text="● SIMULACIÓN (random)",
+                                     font=("Arial", 9, "bold"),
+                                     bg="#0a2a0a", fg="#ffaa00")
+        self.fuente_label.pack(pady=(0, 5))
+
+        # ── Puerto serial (ESP32) ─────────────────────────────────────────────
+        puerto_frame = tk.Frame(datos_frame, bg=self.color_panel)
+        puerto_frame.pack(fill=tk.X, pady=4)
+        tk.Label(puerto_frame, text="Puerto ESP32:",
+                 font=("Arial", 9), bg=self.color_panel, fg="#aaaaaa").pack(side=tk.LEFT)
+        self.puerto_entry = tk.Entry(puerto_frame, width=10,
+                                     font=("Arial", 9), bg="#222244", fg="white",
+                                     insertbackground="white")
+        self.puerto_entry.insert(0, "COM3")
+        self.puerto_entry.pack(side=tk.LEFT, padx=5)
+        self.btn_serial = tk.Button(puerto_frame, text="Conectar",
+                                    command=self.conectar_serial,
+                                    font=("Arial", 9), bg="#003366", fg="white",
+                                    cursor="hand2")
+        self.btn_serial.pack(side=tk.LEFT)
+
+        # ── Botones de control ───────────────────────────────────────────────
+        controles_frame = tk.Frame(datos_frame, bg=self.color_panel)
+        controles_frame.pack(fill=tk.X, pady=12)
+        tk.Button(controles_frame, text="REINICIAR",
+                  command=self.reiniciar_sistema,
+                  bg="#ff6600", fg=self.color_texto,
+                  font=("Arial", 10, "bold"), width=15).pack(pady=4)
+        tk.Button(controles_frame, text="CALIBRAR",
+                  command=self.calibrar_sistema,
+                  bg="#0066ff", fg=self.color_texto,
+                  font=("Arial", 10, "bold"), width=15).pack(pady=4)
+        tk.Button(controles_frame, text="BORRAR RUTA",
+                  command=self.borrar_trayectoria,
+                  bg="#444444", fg=self.color_texto,
+                  font=("Arial", 10, "bold"), width=15).pack(pady=4)
+
+        self.conexion_label = tk.Label(datos_frame,
+                                       text="● CONEXIÓN: DESCONECTADO",
+                                       font=("Arial", 9),
+                                       bg=self.color_panel, fg="#ff0000")
+        self.conexion_label.pack(pady=8)
+
+    # ── Creación de campo con LED ─────────────────────────────────────────────
+    def crear_campo_telemetria(self, parent, etiqueta, var_name, campo_key):
+        """
+        Crea una fila con:
+          [ETIQUETA]  [VALOR]  [LED]  [TEXTO ESTADO]
+        """
+        frame = tk.Frame(parent, bg=self.color_panel)
+        frame.pack(fill=tk.X, pady=7)
+
+        # Etiqueta
+        tk.Label(frame, text=etiqueta,
+                 font=("Arial", 11, "bold"),
+                 bg=self.color_panel, fg="#aaaaaa",
+                 width=14, anchor="w").pack(side=tk.LEFT)
+
+        # Valor numérico
+        valor = tk.Label(frame, text="---",
+                         font=("Arial", 11),
+                         bg=self.color_acento, fg=self.color_activo,
+                         width=16, anchor="e", padx=8)
+        valor.pack(side=tk.LEFT, padx=(0, 6))
+        setattr(self, var_name, valor)
+
+        # LED
+        led = FocoLED(frame, bg_color=self.color_panel)
+        led.pack(side=tk.LEFT, padx=(0, 4))
+        self._leds[campo_key] = led
+
+        # Texto de estado debajo del LED
+        estado_txt = tk.Label(frame, text="INACTIVO",
+                              font=("Arial", 8, "bold"),
+                              bg=self.color_panel, fg="#666666",
+                              width=8, anchor="w")
+        estado_txt.pack(side=tk.LEFT)
+        setattr(self, f"_estado_txt_{campo_key}", estado_txt)
+
+    # ── Actualización de LEDs ─────────────────────────────────────────────────
+    def _set_led_estado(self, campo_key: str, state: str):
+        """Actualiza el LED y el texto de estado de un campo."""
+        if campo_key not in self._leds:
+            return
+        self._leds[campo_key].set_state(state)
+        txt_widget = getattr(self, f"_estado_txt_{campo_key}", None)
+        if txt_widget:
+            config = {
+                LED_OK:    ("ACTIVO",    "#00ff88"),
+                LED_ERROR: ("SIN DATOS", "#ff3333"),
+                LED_OFF:   ("INACTIVO",  "#666666"),
+            }[state]
+            txt_widget.config(text=config[0], fg=config[1])
+
+    def _actualizar_leds(self):
+        """Decide el estado de cada LED según si el sistema está activo o no."""
+        campos = ["latitud", "longitud", "altitud", "hora_gps"]
+        if not self.sistema_activo:
+            for c in campos:
+                self._set_led_estado(c, LED_OFF)
+            return
+        # En simulación todos los campos llegan siempre.
+        # Cuando uses datos reales puedes verificar si el valor cambió entre ciclos.
+        for c in campos:
+            self._set_led_estado(c, LED_OK)
+
+    # ── Lógica del mapa ───────────────────────────────────────────────────────
+    def centrar_mapa(self):
+        if MAPA_REAL:
+            self.mapa_widget.set_position(self.latitud, self.longitud)
+
+    def conectar_serial(self):
+        self.conexion_label.config(text="● Instala pyserial primero", fg="#ffaa00")
+
+    def leer_serial(self):
+        pass
+
+    # ── Radar ─────────────────────────────────────────────────────────────────
+    def dibujar_radar(self):
+        self.canvas_radar.delete("all")
+        width  = self.canvas_radar.winfo_width()
+        height = self.canvas_radar.winfo_height()
+        if width <= 1 or height <= 1:
+            return
+
+        center_x, center_y = width / 2, height / 2
+        radio = min(width, height) / 2 - 20
+
+        for i in range(4, 0, -1):
+            r = radio * i / 4
+            self.canvas_radar.create_oval(center_x - r, center_y - r,
+                                          center_x + r, center_y + r,
+                                          outline="#00ff00", width=1)
+
+        self.canvas_radar.create_line(center_x, center_y - radio,
+                                      center_x, center_y + radio,
+                                      fill="#00ff00", width=1, dash=(2, 4))
+        self.canvas_radar.create_line(center_x - radio, center_y,
+                                      center_x + radio, center_y,
+                                      fill="#00ff00", width=1, dash=(2, 4))
+
+        for i in range(1, 5):
+            distancia_km = (self.distancia / 1000) * i / 4
+            r = radio * i / 4
+            self.canvas_radar.create_text(center_x + r - 15, center_y - 5,
+                                          text=f"{distancia_km:.1f}km",
+                                          fill="#00ff00", font=("Arial", 8))
+
+        if self.sistema_activo:
+            angle_rad = math.radians(self.angulo_radar)
+            end_x = center_x + radio * math.cos(angle_rad)
+            end_y = center_y - radio * math.sin(angle_rad)
+            self.canvas_radar.create_line(center_x, center_y, end_x, end_y,
+                                          fill="#00ff00", width=2)
+
+            if self.distancia > 0:
+                dist_ratio = min(self.distancia / (self.distancia * 1.5), 1)
+                obj_x = center_x + radio * dist_ratio * 0.6 * math.cos(angle_rad)
+                obj_y = center_y - radio * dist_ratio * 0.6 * math.sin(angle_rad)
+                pulse_size = 8 + 4 * math.sin(self.angulo_radar / 20)
+                self.canvas_radar.create_oval(obj_x - pulse_size, obj_y - pulse_size,
+                                              obj_x + pulse_size, obj_y + pulse_size,
+                                              fill="#ff0000", outline="#ff0000")
+                self.canvas_radar.create_text(obj_x + 15, obj_y - 15,
+                                              text=f"{self.distancia:.0f}m",
+                                              fill="#ff0000", font=("Arial", 9, "bold"))
+
+        estado_texto = "ACTIVO" if self.sistema_activo else "EN ESPERA"
+        self.canvas_radar.create_text(center_x, 15,
+                                      text=f"RADAR {estado_texto}",
+                                      fill="#00ff00", font=("Arial", 10, "bold"))
+
+    # ── Mapa real ─────────────────────────────────────────────────────────────
+    def actualizar_mapa_real(self):
+        if not MAPA_REAL or not self.sistema_activo:
+            return
+        if self.marker_cohete:
+            self.marker_cohete.set_position(self.latitud, self.longitud)
+            self.marker_cohete.set_text(f"🚀 {self.altitud:.0f}m")
+        self.trayectoria.append((self.latitud, self.longitud))
+        if len(self.trayectoria) >= 2:
+            if self.path_trayectoria:
+                self.path_trayectoria.delete()
+            self.path_trayectoria = self.mapa_widget.set_path(
+                self.trayectoria, color="red", width=3)
+
+    # ── Mapa simulado ─────────────────────────────────────────────────────────
+    def dibujar_mapa_simulado(self):
+        self.canvas_mapa.delete("all")
+        width  = self.canvas_mapa.winfo_width()
+        height = self.canvas_mapa.winfo_height()
+        if width <= 1 or height <= 1:
+            return
+
+        for i in range(0, width, 40):
+            self.canvas_mapa.create_line(i, 0, i, height, fill="#2a4a2a", width=1)
+        for i in range(0, height, 40):
+            self.canvas_mapa.create_line(0, i, width, i, fill="#2a4a2a", width=1)
+
+        if self.sistema_activo:
+            pos_x = width / 2 + (self.longitud - (-102.2783)) * 1000
+            pos_y = height / 2 - (self.latitud - 22.1475) * 1000
+            pos_x = max(30, min(width - 30, pos_x))
+            pos_y = max(30, min(height - 30, pos_y))
+
+            self.canvas_mapa.create_oval(pos_x - 25, pos_y - 25,
+                                         pos_x + 25, pos_y + 25,
+                                         outline="#ffff00", width=2, dash=(5, 3))
+            self.canvas_mapa.create_polygon(pos_x, pos_y - 15,
+                                            pos_x - 10, pos_y + 10,
+                                            pos_x + 10, pos_y + 10,
+                                            fill="#ff0000", outline="#ffffff", width=2)
+            self.canvas_mapa.create_text(pos_x, pos_y + 25,
+                                         text="🚀 COHETE", fill="#ffffff",
+                                         font=("Arial", 9, "bold"))
+
+            base_x, base_y = width / 2, height / 2
+            self.canvas_mapa.create_rectangle(base_x - 10, base_y - 10,
+                                              base_x + 10, base_y + 10,
+                                              fill="#00ff00", outline="#ffffff", width=2)
+            self.canvas_mapa.create_text(base_x, base_y - 20,
+                                         text="BASE", fill="#00ff00",
+                                         font=("Arial", 9, "bold"))
+            self.canvas_mapa.create_line(base_x, base_y, pos_x, pos_y,
+                                         fill="#00aaff", width=2, dash=(10, 5))
+
+        self.canvas_mapa.create_text(10, height - 10,
+                                     text=f"Lat: {self.latitud:.4f}°",
+                                     fill="#ffffff", anchor="sw", font=("Arial", 8))
+        self.canvas_mapa.create_text(width - 10, height - 10,
+                                     text=f"Lon: {self.longitud:.4f}°",
+                                     fill="#ffffff", anchor="se", font=("Arial", 8))
+
+    # ── Bucle principal ───────────────────────────────────────────────────────
+    def actualizar_datos(self):
+        if self.sistema_activo:
+            # Datos simulados — reemplaza con leer_serial() cuando conectes el ESP32
+            self.angulo_radar = (self.angulo_radar + 5) % 360
+            self.distancia    = max(50, self.distancia + random.uniform(-20, -5))
+            self.altitud      = max(0,  self.altitud   + random.uniform(-10, 5))
+            self.velocidad    = random.uniform(0, 15)
+            self.latitud     += random.uniform(-0.0001, 0.0001)
+            self.longitud    += random.uniform(-0.0001, 0.0001)
+            self.bateria      = max(0, self.bateria - 0.01)
+            self.hora_gps     = datetime.now().strftime("%H:%M:%S")
+
+            # Actualizar etiquetas
+            self.latitud_valor.config(text=f"{self.latitud:.6f}°")
+            self.longitud_valor.config(text=f"{self.longitud:.6f}°")
+            self.altitud_valor.config(text=f"{self.altitud:.2f} m")
+            self.hora_gps_valor.config(text=self.hora_gps)
+
+            self.actualizar_mapa_real()
+
+        # Hora del sistema
+        self.hora_valor.config(text=datetime.now().strftime("%H:%M:%S"))
+
+        # LEDs
+        self._actualizar_leds()
+
+        # Dibujos
+        self.dibujar_radar()
+        if not MAPA_REAL:
+            self.dibujar_mapa_simulado()
+
+        self.root.after(100, self.actualizar_datos)
+
+    # ── Toggle / control ──────────────────────────────────────────────────────
+    def toggle_sistema(self):
+        self.sistema_activo = not self.sistema_activo
+        if self.sistema_activo:
+            self.estado_frame.config(bg=self.color_activo)
+            self.estado_label.config(bg=self.color_activo,  text="ACTIVO")
+            self.btn_activar.config(text="DESACTIVAR SISTEMA", bg="#aa0000")
+            self.conexion_label.config(text="● CONEXIÓN: ESTABLE", fg="#00ff00")
+        else:
+            self.estado_frame.config(bg=self.color_inactivo)
+            self.estado_label.config(bg=self.color_inactivo, text="INACTIVO")
+            self.btn_activar.config(text="ACTIVAR SISTEMA", bg="#00aa00")
+            self.conexion_label.config(text="● CONEXIÓN: DESCONECTADO", fg="#ff0000")
+
+    def reiniciar_sistema(self):
+        self.latitud    = 22.1475
+        self.longitud   = -102.2783
+        self.altitud    = 2500.0
+        self.distancia  = 1500.0
+        self.bateria    = 85
+        self.velocidad  = 0
+        self.angulo_radar = 0
+        self.hora_gps   = "--:--:--"
+        self.trayectoria = []
+        if MAPA_REAL and self.path_trayectoria:
+            self.path_trayectoria.delete()
+            self.path_trayectoria = None
+        if MAPA_REAL and self.marker_cohete:
+            self.marker_cohete.set_position(self.latitud, self.longitud)
+
+    def borrar_trayectoria(self):
+        self.trayectoria = []
+        if MAPA_REAL and self.path_trayectoria:
+            self.path_trayectoria.delete()
+            self.path_trayectoria = None
+
+    def calibrar_sistema(self):
+        self.conexion_label.config(text="● CALIBRANDO...", fg="#ffaa00")
+        self.root.after(2000, lambda: self.conexion_label.config(
+            text="● CONEXIÓN: ESTABLE", fg="#00ff00"))
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = SistemaRecuperacion(root)
+    root.mainloop()

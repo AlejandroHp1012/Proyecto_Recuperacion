@@ -156,7 +156,7 @@ class SistemaRecuperacion:
             "telemetria_log.json"
         )
         self._json_buffer: list = []
-        self._json_flush_every = 10   # guardar archivo cada N muestras
+        self._json_last_flush: float = 0.0   # timestamp del último flush
 
         self._construir_ui()
         self._loop()
@@ -749,13 +749,13 @@ class SistemaRecuperacion:
     # JSON
     # =========================================================================
     def _guardar_json(self):
-        """Agrega la muestra actual al buffer y vuelca al archivo JSON."""
+        """Agrega la muestra actual al buffer y vuelca al archivo cada 60 segundos."""
         muestra = {
-            "timestamp":  datetime.now().isoformat(timespec="milliseconds"),
-            "hora_gps":   self.hora_gps,
-            "latitud":    round(self.latitud,  6),
-            "longitud":   round(self.longitud, 6),
-            "altitud_m":  round(self.altitud,  2),
+            "timestamp":    datetime.now().isoformat(timespec="milliseconds"),
+            "hora_gps":     self.hora_gps,
+            "latitud":      round(self.latitud,  6),
+            "longitud":     round(self.longitud, 6),
+            "altitud_m":    round(self.altitud,  2),
             "velocidad_ms": round(self.velocidad, 2),
             "distancia_m":  round(self.distancia, 1),
             "bateria_pct":  round(self.bateria,   2),
@@ -763,8 +763,12 @@ class SistemaRecuperacion:
         }
         self._json_buffer.append(muestra)
 
-        if len(self._json_buffer) % self._json_flush_every == 0:
+        # Flush cada 60 segundos
+        ahora = time.time()
+        if ahora - self._json_last_flush >= 60:
             self._flush_json()
+            self._json_last_flush = ahora
+            self._log(f">>> JSON guardado — {len(self._json_buffer)} muestras acumuladas")
 
     def _flush_json(self):
         """Escribe/actualiza el archivo JSON en disco."""
@@ -884,6 +888,7 @@ class SistemaRecuperacion:
             # Iniciar sesión JSON
             self._session_start = datetime.now().isoformat(timespec="milliseconds")
             self._json_buffer = []
+            self._json_last_flush = time.time()  # reinicia el contador de 60s
 
             self._btn.config(text="[ DESACTIVAR SISTEMA ]",
                             bg="#1a0000", fg=C["red_alert"])
